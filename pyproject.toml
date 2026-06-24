@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mcp-probe"
+version = "0.1.0"
+description = "Runtime behavioral auditor for MCP servers — strace-based scope-violation detection"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Navid" },  # <-- add your name / email if you want it public
+]
+keywords = ["mcp", "security", "agents", "auditing", "strace"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+# <-- FILL THIS IN: whatever you actually import at runtime.
+# Look at the top of your source files for `import X` lines that
+# aren't standard library. If you genuinely have zero third-party
+# deps (plausible for a strace-wrapping tool), leave this empty.
+dependencies = [
+    # "click>=8.0",
+    # "rich>=13.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/navid72m/mcp-probe"  # <-- fix
+Issues = "https://github.com/navid72m/mcp-probe/issues"  # <-- fix
+
+# <-- FILL THIS IN: this is what makes `mcp-probe` a runnable command.
+# Format is "command-name = import.path.to.module:function_name"
+# e.g. if you have src/mcp_probe/cli.py with a `def main():`,
+# this would be "mcp_probe.cli:main"
+[project.scripts]
+mcp-probe = "mcp_probe.cli:main"  # <-- fix module path + function
+
+# Tells hatchling where your package source lives.
+# Use this block if your code is under src/mcp_probe/ (recommended layout).
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_probe"]
+# If your code is instead just mcp_probe/ at the repo root (no src/),
+# delete the line above and use:
+# packages = ["mcp_probe"]
