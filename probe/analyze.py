@@ -38,6 +38,12 @@ def interesting_file(path: str) -> bool:
 def interesting_net(ip: str) -> bool:
     return not any(ip.startswith(n) for n in NET_NOISE)
 
+def real_port(entry: str) -> bool:
+    # Drop ":0" pseudo-destinations: connect() calls captured mid-setup or on
+    # non-TCP sockets render port 0. They duplicate real "IP:443" findings as
+    # noise. Keep only entries with a real (non-zero) port.
+    return not entry.endswith(":0")
+
 def analyze(path: str) -> dict:
     files, nets, execs = set(), set(), set()
     filtered_files = 0  # how many openat hits the noise filter removed
@@ -53,7 +59,7 @@ def analyze(path: str) -> dict:
             if (m := EXECVE.search(line)):
                 execs.add(m.group(1))
     return {"files_opened": sorted(files),
-            "network_connects": sorted(nets),
+            "network_connects": sorted(n for n in nets if real_port(n)),
             "subprocesses": sorted(execs),
             # provenance: lets a caller distinguish "genuinely clean" from
             # "noise filter ate everything" when a real server yields 0 findings.

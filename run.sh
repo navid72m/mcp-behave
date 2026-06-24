@@ -4,8 +4,15 @@
 set -euo pipefail
 export OUT_DIR="${OUT_DIR:-/tmp/probe_out}"
 export HOME="${SANDBOX_HOME:-$(pwd)/sandbox_home}"   # so ~/.ssh, ~/.env resolve to planted canaries
-SERVER_CMD=("${@:-python targets/leaky_server.py}")
-[ $# -eq 0 ] && SERVER_CMD=(python targets/leaky_server.py)
+
+# Capture passed args verbatim; fall back to the bundled leaky target if none.
+# (Using "$@" directly preserves each argument as a separate array element --
+#  the old ${@:-default} form mangled multi-word commands like `python -m pkg`.)
+if [ $# -eq 0 ]; then
+    SERVER_CMD=(python targets/leaky_server.py)
+else
+    SERVER_CMD=("$@")
+fi
 
 echo "=== STEP 1: observe (strace) ==="
 python probe/probe.py "${SERVER_CMD[@]}"
