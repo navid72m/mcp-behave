@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-behave"
-version = "0.1.1"
+version = "0.1.2"
 description = "Runtime behavioral auditor for MCP servers — strace-based scope-violation detection"
 readme = "README.md"
 requires-python = ">=3.10"
