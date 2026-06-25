@@ -3,7 +3,7 @@ prompts) with synthesized inputs, and record both the server's self-declared
 manifest and the raw syscall trace of what it actually did.
 
 No judgements here -- that's report.py."""
-import asyncio, hashlib, json, os, sys
+import asyncio, hashlib, json, os, platform, shlex, shutil, sys
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -15,6 +15,32 @@ MANIFEST   = os.path.join(OUT_DIR, "manifest.json")
 SYSCALLS   = "openat,connect,execve"
 # Per-call timeout. A hanging tool used to hang the whole probe.
 DEFAULT_CALL_TIMEOUT = float(os.environ.get("MCP_BEHAVE_CALL_TIMEOUT", "15"))
+
+
+def _trace_command(server_cmd: list[str], trace_file: str
+                   ) -> tuple[list[str] | None, str]:
+    """Pick the platform's syscall tracer and build the argv to spawn.
+
+    Returns (argv, tracer_name). argv is None if no tracer is available;
+    callers should fall back to running the server untraced.
+    """
+    if platform.system() == "Darwin":
+        # macOS: dtruss is a DTrace wrapper. It needs root (sudo) and writes
+        # its trace lines to stderr (no -o flag), so wrap in sh to redirect.
+        # Limitation: dtruss does NOT dereference connect()'s sockaddr, so
+        # network destinations are not captured on Darwin -- file and exec
+        # tracing still work.
+        if not shutil.which("dtruss"):
+            return None, ""
+        quoted = " ".join(shlex.quote(a) for a in server_cmd)
+        wrapper = (f"exec dtruss -f {quoted} "
+                   f"2> {shlex.quote(trace_file)}")
+        return ["sh", "-c", wrapper], "dtruss"
+
+    if shutil.which("strace"):
+        return (["strace", "-f", "-qq", "-e", f"trace={SYSCALLS}",
+                 "-o", trace_file, *server_cmd], "strace")
+    return None, ""
 
 
 def synth_args(schema: dict) -> dict:
@@ -179,19 +205,32 @@ def _write_manifest(server_cmd, tools_meta, resources_meta, prompts_meta, stats,
 
 
 async def run(server_cmd: list[str], call_timeout: float = DEFAULT_CALL_TIMEOUT):
-    """Stdio transport: wrap the server in strace and connect via stdio."""
+    """Stdio transport: wrap the server in the platform's syscall tracer
+    (strace on Linux, dtruss on macOS) and connect via stdio."""
     os.makedirs(OUT_DIR, exist_ok=True)
-    strace_cmd = ["strace", "-f", "-qq", "-e", f"trace={SYSCALLS}",
-                  "-o", TRACE_FILE, *server_cmd]
-    params = StdioServerParameters(command=strace_cmd[0], args=strace_cmd[1:],
-                                   env={**os.environ})
+    trace_cmd, tracer = _trace_command(server_cmd, TRACE_FILE)
+    syscalls_available = bool(tracer)
+    # Pre-touch the trace file: dtruss writes lazily via stderr redirect, and
+    # analyze() needs a readable file even if the server exits before any
+    # interesting syscall fires.
+    open(TRACE_FILE, "w").close()
+
+    if syscalls_available:
+        params = StdioServerParameters(command=trace_cmd[0], args=trace_cmd[1:],
+                                       env={**os.environ})
+    else:
+        print(f"[probe] no syscall tracer available on {platform.system()}; "
+              "running server untraced (manifest analysis only)",
+              file=sys.stderr)
+        params = StdioServerParameters(command=server_cmd[0], args=server_cmd[1:],
+                                       env={**os.environ})
 
     async with stdio_client(params) as (read, write):
         async with ClientSession(read, write) as session:
             tools_meta, resources_meta, prompts_meta, stats = await _exercise(
                 session, call_timeout)
     _write_manifest(server_cmd, tools_meta, resources_meta, prompts_meta, stats,
-                    transport="stdio", syscalls_available=True)
+                    transport="stdio", syscalls_available=syscalls_available)
 
 
 async def run_remote(url: str, *, transport: str,

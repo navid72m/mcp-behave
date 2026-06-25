@@ -2,7 +2,7 @@
 
 Thin orchestrator. Does NOT reimplement probe/analyze/report -- it calls them.
 """
-import argparse, asyncio, json, os, sys
+import argparse, asyncio, json, os, platform, sys
 
 from . import __version__
 from . import probe as probe_mod
@@ -19,6 +19,17 @@ If you're on Linux directly and still see this, your environment may restrict
 ptrace (check /proc/sys/kernel/yama/ptrace_scope, or run under sudo).
 """
 
+DTRACE_HINT = """
+mcp-behave couldn't trace the target server with dtruss on macOS.
+
+dtruss is a DTrace wrapper and requires root. Try:
+    sudo mcp-behave <server-command>
+
+If you're already running with sudo and still see this, System Integrity
+Protection may be blocking the target -- Apple-signed binaries (and anything
+launched through them) cannot be traced by DTrace even as root.
+"""
+
 # Severity ranking for --fail-on comparisons.
 SEV_RANK = {"INFO": 1, "HIGH": 2}
 
@@ -26,7 +37,8 @@ SEV_RANK = {"INFO": 1, "HIGH": 2}
 def _looks_like_ptrace_failure(exc: BaseException) -> bool:
     text = repr(exc).lower() + str(exc).lower()
     return any(s in text for s in
-               ("connection closed", "permission denied", "ptrace", "exec"))
+               ("connection closed", "permission denied", "ptrace", "exec",
+                "dtrace", "requires additional privileges"))
 
 
 def _build_parser():
@@ -135,7 +147,8 @@ def main(argv=None):
         raise
     except BaseException as exc:
         if args.transport == "stdio" and _looks_like_ptrace_failure(exc):
-            print(PTRACE_HINT, file=sys.stderr)
+            hint = DTRACE_HINT if platform.system() == "Darwin" else PTRACE_HINT
+            print(hint, file=sys.stderr)
             return 2
         print(f"\nmcp-behave: probe failed: {exc}", file=sys.stderr)
         return 1

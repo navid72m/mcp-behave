@@ -2,12 +2,22 @@
 Pure observation -- lists what the server touched. No allowlist, no verdict yet."""
 import re, sys, json, os
 
-OPENAT = re.compile(r'openat\([^,]+,\s*"([^"]+)"')
+# Matches strace's `openat(AT_FDCWD, "path"` AND dtruss's `open("path"` /
+# `openat(0xff..., "path"`. The fd/dirfd arg before the path is optional.
+OPENAT = re.compile(r'\bopen(?:at)?\((?:[^,)]+,\s*)?"([^"]+)"')
 # matches both: sin_addr=inet_addr("1.2.3.4")  and  sin6_addr=inet_pton(AF_INET6, "::1", ...)
+# Linux/strace only -- dtruss does NOT dereference sockaddr, so connect() targets
+# are not observable on Darwin.
 CONNECT = re.compile(r'connect\(\d+,\s*\{sa_family=AF_INET6?,\s*'
                      r'sin6?_port=htons\((\d+)\),\s*sin6?_addr=inet_'
                      r'(?:addr|pton)\((?:[^,]+,\s*)?"([^"]+)"')
-EXECVE = re.compile(r'execve\("([^"]+)"')
+EXECVE = re.compile(r'\bexecve\("([^"]+)"')
+
+
+def _clean_path(p: str) -> str:
+    # dtruss appends a literal `\0` to dereferenced C strings (e.g. "/etc/hosts\0").
+    # strace does not. Strip it so both tracers yield identical paths.
+    return p[:-2] if p.endswith("\\0") else p
 # DEFERRED (v2): AF_UNIX egress and alternate sockaddr renderings are not matched.
 # A server exfiltrating over a unix domain socket would slip past CONNECT today.
 
@@ -50,14 +60,15 @@ def analyze(path: str) -> dict:
     with open(path, errors="replace") as f:
         for line in f:
             if (m := OPENAT.search(line)):
-                if interesting_file(m.group(1)):
-                    files.add(m.group(1))
+                path = _clean_path(m.group(1))
+                if interesting_file(path):
+                    files.add(path)
                 else:
                     filtered_files += 1
             if (m := CONNECT.search(line)) and interesting_net(m.group(2)):
                 nets.add(f"{m.group(2)}:{m.group(1)}")
             if (m := EXECVE.search(line)):
-                execs.add(m.group(1))
+                execs.add(_clean_path(m.group(1)))
     return {"files_opened": sorted(files),
             "network_connects": sorted(n for n in nets if real_port(n)),
             "subprocesses": sorted(execs),
