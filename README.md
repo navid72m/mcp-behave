@@ -1,21 +1,20 @@
-# mcp-behavioral-probe (Phase 0 spike)
+# mcp-behave
 
-A throwaway-quality spike that answers one question: **can we get accurate
-behavioral ground truth out of a sandboxed MCP server?** If yes, the real tool
-(behavioral auditing of MCP servers — "watch what it *does*, not what it
-*says*") is worth building. If running this was miserable, it wasn't.
+**Runtime behavioral auditor for MCP servers.** Runs an MCP server under
+`strace`, exercises every tool / resource / prompt it advertises, and then
+compares what it *declared* against what it actually *did* — file reads,
+network egress, subprocess execution.
 
-This is intentionally ~200 lines. It is not the product. It is the go/no-go gate.
+Static scanners read tool descriptions. `mcp-behave` watches behavior.
 
 ## The idea in one contrast
 
-`targets/leaky_server.py` and `targets/honest_server.py` expose a tool with the
-**identical** name, description, and schema:
+`targets/leaky_server.py` and `targets/honest_server.py` advertise the
+**identical** tool:
 
 > `format_note` — "Formats a markdown note. Purely local text formatting."
 
-A static scanner that reads tool descriptions sees two identical, harmless tools.
-Run them under this probe and the difference is obvious:
+A static scanner reads two harmless tools. `mcp-behave` sees the difference:
 
 | Target          | network egress      | sensitive file read        | findings |
 |-----------------|---------------------|----------------------------|----------|
@@ -23,66 +22,95 @@ Run them under this probe and the difference is obvious:
 | `leaky_server`  | `93.184.216.34:80`  | `~/.ssh/id_rsa` (a canary) | **2 HIGH** |
 
 The honest server producing **zero** findings matters as much as the leaky one
-tripping two — false positives are what would kill credibility.
+tripping two — false positives would kill credibility.
 
-## How it works
-
-Three steps, one syscall tracer:
-
-1. **observe** (`probe/probe.py`) — launches the MCP server wrapped in
-   `strace -f`, does the MCP handshake over stdio, lists tools, and calls each
-   with synthesized inputs. `strace` records `openat` / `connect` / `execve` /
-   `sendto` to a log while passing stdio through transparently.
-2. **profile** (`probe/analyze.py`) — parses the trace into a structured
-   behavioral profile (files opened, network connects, subprocesses), filtering
-   out library/runtime noise. Pure observation, no judgement.
-3. **diff** (`probe/report.py`) — a *deliberately crude* declared-vs-observed
-   comparison (a teaser of the real Phase 2 engine). Two rules only: network
-   egress when a tool claims to be local, and reads of sensitive paths. Findings
-   are framed as observations ("does X, undeclared"), never accusations.
-
-Canaries (a fake `~/.ssh/id_rsa` and `~/.env`) are planted in `sandbox_home/`
-and exposed as `$HOME`, so a server that reaches for secrets reveals itself.
-
-## Run it
-
-Docker (works on macOS too — `strace` is Linux-only):
+## Install
 
 ```bash
-docker build -t mcp-probe .
-docker run --rm mcp-probe                          # default: the leaky target
-docker run --rm mcp-probe python targets/honest_server.py   # the control
+pip install mcp-behave
 ```
 
-Locally on Linux:
+Requires Linux + `strace` for the syscall-trace backend. On macOS/Windows, use
+the bundled `Dockerfile` (see below).
+
+## Use
 
 ```bash
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-./run.sh                              # leaky target (default)
-./run.sh python targets/honest_server.py
+# Audit any stdio MCP server -- pass its launch command:
+mcp-behave python -m mcp_server_fetch
+mcp-behave npx -y @modelcontextprotocol/server-filesystem /tmp
+mcp-behave uvx mcp-server-git
+
+# Machine-readable output for CI:
+mcp-behave --json --fail-on high python -m mcp_server_fetch
+
+# Connect to an already-running remote server (manifest analysis only,
+# no syscall trace possible):
+mcp-behave --transport sse http://localhost:8000/sse
 ```
 
-Point it at a real server (anything that speaks MCP over stdio), e.g.:
+Exit codes: `0` clean, `3` findings at or above `--fail-on` threshold,
+`2` strace/ptrace setup failed, `1` other error.
+
+### Useful flags
+
+- `--json` — emit findings as JSON on stdout.
+- `--fail-on {never,info,high}` — severity that triggers exit code 3 (default `high`).
+- `--no-dns` — skip reverse-DNS lookups (faster, offline-safe).
+- `--timeout SECONDS` — per-call timeout (default 15).
+- `--transport {stdio,sse,streamable-http}` — remote transports skip syscall tracing.
+- `--out-dir PATH` — where `manifest.json` and `trace.log` are written.
+
+## What it detects
+
+- **Undeclared network egress** — IP:port destinations reached during tool calls
+  (reverse-DNS resolved in findings when available).
+- **Sensitive-path reads** — `~/.ssh/*`, `~/.aws/*`, `~/.env`, `~/.netrc`, etc.
+- **Rug-pull** — the declared manifest hash changes between runs of the same
+  server (e.g. a tool's description silently changes after the user trusts it).
+  Hashes persist under `$XDG_DATA_HOME/mcp-behave/manifests/`.
+
+Findings are framed as observations ("does X, undeclared"), never accusations.
+
+## Docker (works on macOS / Windows hosts)
 
 ```bash
-./run.sh python -m mcp_server_fetch
+docker build -t mcp-behave .
+# default: runs the bundled leaky target so you can see findings immediately
+docker run --rm --cap-add=SYS_PTRACE mcp-behave
+# point at a real server
+docker run --rm --cap-add=SYS_PTRACE mcp-behave python -m mcp_server_fetch
 ```
 
-## Known limits (deliberately out of scope for Phase 0)
+`--cap-add=SYS_PTRACE` is required for `strace` to attach inside the container.
 
-- **Linux-only** ground truth via `strace`. eBPF/seccomp is the Phase 1+ upgrade.
-- **No DNS resolution** — connects are reported as IP:port, not domains.
-- **stdio transport only.** HTTP/SSE servers come in Phase 1.
-- **Input synthesis is dumb** (one canary value per field). Phase 1 swaps in
-  `hypothesis-jsonschema` for real coverage.
-- **The diff is a toy.** The real declared-scope model (allowlists, taxonomy,
-  rug-pull manifest hashing) is Phase 2.
-- A server that only misbehaves on specific inputs, or after N calls, may not be
-  triggered by a single synthesized call. Exercising state is later work.
+The image bundles Node.js (for `npx` servers), `uv` (for `uvx` servers), and
+sandbox canary files (`sandbox_home/`) mounted as `$HOME` so credential reads
+are detectable.
 
-## If the gate passed
+## Development
 
-Next is Phase 1: generalize `analyze.py` into a reusable profiler, add the HTTP
-transport, and swap in schema-based input synthesis — then run it against ~5 real
-servers and confirm the profiles are accurate.
+```bash
+pip install -e ".[test]"
+pytest -v
+```
+
+CI runs on Ubuntu (strace is Linux-only); see `.github/workflows/ci.yml`.
+
+## Known limits
+
+- **Linux-only ground truth** via `strace`. eBPF/seccomp backend is on the
+  roadmap — see [ROADMAP.md](ROADMAP.md).
+- **stdio is the only transport with syscall tracing.** `sse` and
+  `streamable-http` connect to a remote server we cannot trace; only manifest
+  analysis and rug-pull detection apply there.
+- **Input synthesis is heuristic** — JSON Schema `format`, key-name hints, and
+  type defaults. Schema-coverage fuzzing (hypothesis-jsonschema) is roadmap.
+- **AF_UNIX egress** isn't matched — a server exfiltrating over a unix domain
+  socket would slip past the current network detection.
+- **Single call per capability** — servers that misbehave only on specific
+  inputs or after N calls may not be triggered.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

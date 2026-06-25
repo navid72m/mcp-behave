@@ -1,0 +1,29 @@
+name: publish
+
+# Triggered by pushing a version tag like v0.1.0.
+# Uses PyPI Trusted Publishers (OIDC) -- no API token to manage.
+# One-time setup: at pypi.org/manage/account/publishing, add this repo as a
+# trusted publisher with workflow=publish.yml and environment=pypi.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write  # required for Trusted Publishers OIDC
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build
+        run: |
+          pip install build
+          python -m build
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
