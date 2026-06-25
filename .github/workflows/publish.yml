@@ -30,3 +30,7 @@ jobs:
           python -m build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # PyPI rejects re-uploads of the same filename. Skip silently so
+          # re-running the workflow on a published version is a no-op success.
+          skip-existing: true
