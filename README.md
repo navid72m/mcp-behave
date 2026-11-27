@@ -12,6 +12,8 @@
 [![MCP Registry](https://img.shields.io/badge/MCP%20Registry-listed-blue)](https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.navid72m/mcp-behave)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/mcp-behave?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/mcp-behave)
+
 mcp-behave is a **CLI-first security tool** for checking what an MCP server actually does at runtime—not only what its tool schemas and descriptions claim. It exercises advertised capabilities, observes selected filesystem, network, and subprocess activity, inspects protocol payloads, and compares behavior against saved baselines.
 
 <p align="center">
